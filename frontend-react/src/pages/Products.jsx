@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import ProductForm from "../components/ProductForm";
 import { useNavigate } from "react-router-dom";
+import { createSocket } from "../socket";
 
 export default function Products() {
   const nav = useNavigate();
@@ -11,16 +12,19 @@ export default function Products() {
   const [editing, setEditing] = useState(null);
   const [loading, setLoading] = useState(true);
 
+  // keep socket in a ref-like variable
+  const [socket, setSocket] = useState(null);
+
   const load = async () => {
     setLoading(true);
     setMsg("");
     try {
       const who = await api.me();
       setMe(who.user);
+
       const list = await api.listProducts();
       setItems(list);
     } catch (err) {
-      // Not logged in? Go to login page
       nav("/login");
     } finally {
       setLoading(false);
@@ -29,14 +33,53 @@ export default function Products() {
 
   useEffect(() => {
     load();
-    // eslint-disable-next-line
+  // eslint-disable-next-line
   }, []);
+
+  useEffect(() => {
+    // connect socket after we know who we are (optional)
+    if (!socket) {
+      const s = createSocket();
+      setSocket(s);
+
+      s.on("connect", () => {
+        // when we know the user, join their room
+        if (me?.id || me?._id) {
+          s.emit("register", me.id || me._id);
+        }
+      });
+
+      s.on("product:created", (p) => {
+        setItems((prev) => [p, ...prev]);
+        setMsg(`New product: ${p.name}`);
+      });
+
+      s.on("product:updated", (p) => {
+        setItems((prev) => prev.map((i) => (i._id === p._id ? p : i)));
+        setMsg(`Updated: ${p.name}`);
+      });
+
+      s.on("product:deleted", ({ _id }) => {
+        setItems((prev) => prev.filter((i) => i._id !== _id));
+        setMsg(`Deleted product ${_id}`);
+      });
+
+      s.on("notify", (n) => {
+        // user-specific notifications
+        setMsg(n.message || "You have a notification");
+      });
+
+      return () => {
+        s.close();
+      };
+    }
+  }, [socket, me]);
 
   const onCreate = async (payload) => {
     setMsg("");
     try {
       const created = await api.createProduct(payload);
-      setItems((prev) => [created, ...prev]);
+      // local optimistic update not necessary; socket will broadcast
       setEditing(null);
       setMsg("Created!");
     } catch (err) {
@@ -48,8 +91,7 @@ export default function Products() {
   const onUpdate = async (id, payload) => {
     setMsg("");
     try {
-      const updated = await api.updateProduct(id, payload);
-      setItems((prev) => prev.map((i) => (i._id === id ? updated : i)));
+      await api.updateProduct(id, payload);
       setEditing(null);
       setMsg("Updated!");
     } catch (err) {
@@ -62,7 +104,7 @@ export default function Products() {
     setMsg("");
     try {
       await api.deleteProduct(id);
-      setItems((prev) => prev.filter((i) => i._id !== id));
+      setMsg("Deleted!");
     } catch (err) {
       setMsg(err?.error || "Delete failed");
     }
@@ -76,7 +118,7 @@ export default function Products() {
   return (
     <div className="container">
       <header className="bar">
-        <h1>Products</h1>
+        <h1>Products (Real-time)</h1>
         <div>
           {me && <span className="pill">{me.name} ({me.role})</span>}
           <button onClick={logout} style={{ marginLeft: 8 }}>Logout</button>
