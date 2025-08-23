@@ -14,7 +14,6 @@ router.get(
     res.json(items);
   })
 );
-
 // Protected: create
 router.post(
   "/",
